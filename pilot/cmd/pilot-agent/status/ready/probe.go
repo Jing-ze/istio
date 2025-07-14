@@ -69,7 +69,8 @@ func (p *Probe) checkConfigStatus() error {
 
 	CDSUpdated := s.CDSUpdatesSuccess > 0
 	LDSUpdated := s.LDSUpdatesSuccess > 0
-	if CDSUpdated && LDSUpdated {
+	RDSRejected := s.RDSUpdatesRejection > 0
+	if CDSUpdated && LDSUpdated && !RDSRejected {
 		p.receivedFirstUpdate = true
 		return nil
 	}
@@ -78,6 +79,8 @@ func (p *Probe) checkConfigStatus() error {
 		return fmt.Errorf("config not received from XDS server (is Istiod running?): %s", s.String())
 	} else if s.LDSUpdatesRejection > 0 || s.CDSUpdatesRejection > 0 {
 		return fmt.Errorf("config received from XDS server, but was rejected: %s", s.String())
+	} else if RDSRejected {
+		return fmt.Errorf("config received from XDS server, but was rejected: %s, rds rejected: %d", s.String(), s.RDSUpdatesRejection)
 	} else {
 		return fmt.Errorf("config not fully received from XDS server: %s", s.String())
 	}

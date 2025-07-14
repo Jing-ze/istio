@@ -25,6 +25,7 @@ import (
 	multierror "github.com/hashicorp/go-multierror"
 
 	"istio.io/istio/pkg/http"
+	"regexp"
 )
 
 const (
@@ -36,6 +37,7 @@ const (
 	statWorkersStarted = "listener_manager.workers_started"
 	readyStatsRegex    = "^(server\\.state|listener_manager\\.workers_started)"
 	updateStatsRegex   = "^(cluster_manager\\.cds|listener_manager\\.lds)\\.(update_success|update_rejected)$"
+	statRdsRejected    = "^http\\..*\\.rds\\..*\\.update_rejected: (\\d+)"
 )
 
 var readinessTimeout = time.Second * 60 // Default Readiness timeout. It is set the same in helm charts.
@@ -44,6 +46,7 @@ type stat struct {
 	name  string
 	value *uint64
 	found bool
+	regex *regexp.Regexp // Optional: if not nil, use regex to match and accumulate values
 }
 
 // Stats contains values of interest from a poll of Envoy stats.
@@ -53,6 +56,7 @@ type Stats struct {
 	CDSUpdatesRejection uint64
 	LDSUpdatesSuccess   uint64
 	LDSUpdatesRejection uint64
+	RDSUpdatesRejection uint64
 	// Server State of Envoy.
 	ServerState    uint64
 	WorkersStarted uint64
@@ -119,6 +123,7 @@ func GetUpdateStatusStats(localHostAddr string, adminPort uint16) (*Stats, error
 		{name: statCdsRejected, value: &s.CDSUpdatesRejection},
 		{name: statLdsSuccess, value: &s.LDSUpdatesSuccess},
 		{name: statLdsRejected, value: &s.LDSUpdatesRejection},
+		{name: statRdsRejected, value: &s.RDSUpdatesRejection, regex: regexp.MustCompile(statRdsRejected)},
 	}
 	if err := parseStats(stats, allStats); err != nil {
 		return nil, err
@@ -145,7 +150,19 @@ func parseStats(input *bytes.Buffer, stats []*stat) (err error) {
 }
 
 func (s *stat) processLine(line string) error {
-	if !s.found && strings.HasPrefix(line, s.name) {
+	if s.regex != nil {
+		if s.regex.MatchString(line) {
+			parts := strings.Split(line, ":")
+			if len(parts) != 2 {
+				return fmt.Errorf("envoy stat %s missing separator. line:%s", s.name, line)
+			}
+			val, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64)
+			if err == nil {
+				*s.value += val
+			}
+		}
+		return nil
+	} else if !s.found && strings.HasPrefix(line, s.name) {
 		s.found = true
 
 		parts := strings.Split(line, ":")
